@@ -5,7 +5,6 @@ import uuid
 class WorkflowState(BaseModel):
     """
     Represents the state of a running orchestration workflow.
-    This will be serialized to Redis.
     """
     workflow_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
@@ -13,8 +12,17 @@ class WorkflowState(BaseModel):
     current_location: Optional[Dict[str, float]] = None
     
     # Execution trace
-    status: str = "pending" # pending, running, completed, error
+    status: str = "pending" # pending, running, waiting_for_user, retrying, completed, error
     completed_steps: List[str] = Field(default_factory=list)
+    pending_questions: List[str] = Field(default_factory=list)
+    
+    # Confidence and Retry Tracking
+    overall_confidence: float = 1.0
+    intent_confidence: float = 1.0
+    provider_match_confidence: float = 1.0
+    retry_count: int = 0
+    max_retries: int = 3
+    last_error: Optional[str] = None
     
     # Agent outputs
     intent: Optional[Dict[str, Any]] = None
@@ -25,5 +33,5 @@ class WorkflowState(BaseModel):
     followup_scheduled: bool = False
 
     def get_progress(self) -> float:
-        total_steps = 6 # intent, context, discovery, ranking, booking, followup
-        return len(self.completed_steps) / total_steps
+        total_steps = 6
+        return min(1.0, len(self.completed_steps) / total_steps)

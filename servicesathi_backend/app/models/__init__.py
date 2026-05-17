@@ -13,6 +13,11 @@ class IntentExtraction(BaseModel):
     language: str
     budget_range: Optional[str] = None
     confidence: float
+    missing_context: List[str] = Field(default_factory=list, description="List of critical missing details")
+
+class ClarificationReply(BaseModel):
+    reply: str = Field(..., description="User's response to the clarification question")
+    current_location: Optional[Dict[str, float]] = None
 
 class Provider(BaseModel):
     id: str
@@ -25,10 +30,16 @@ class Provider(BaseModel):
     price_min: int
     price_max: int
     experience_years: int
+    is_available: bool = True
 
 class RankedProvider(Provider):
     ai_match_score: int
     ai_reasoning: str
+    
+    # Raw scores for trace
+    rating_score: float = 0.0
+    distance_score: float = 0.0
+    availability_score: float = 0.0
 
 class AgentTrace(BaseModel):
     agent_name: str
