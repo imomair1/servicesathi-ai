@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'config/theme.dart';
 import 'config/colors.dart';
 import 'screens/splash_screen.dart';
@@ -14,15 +16,24 @@ import 'screens/notification_screen.dart';
 import 'screens/profile_screen.dart';
 import 'widgets/bottom_nav.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Load environment variables
+  await dotenv.load(fileName: ".env");
+
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
     ),
   );
-  runApp(const ServiceSathiApp());
+  
+  runApp(
+    const ProviderScope(
+      child: ServiceSathiApp(),
+    ),
+  );
 }
 
 class ServiceSathiApp extends StatefulWidget {

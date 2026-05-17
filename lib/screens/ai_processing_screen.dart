@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'dart:async';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
-import '../models/models.dart';
+import '../features/workflow/providers/workflow_providers.dart';
+import 'dart:async';
 
-class AIProcessingScreen extends StatefulWidget {
+class AIProcessingScreen extends ConsumerStatefulWidget {
   final String userRequest;
   final VoidCallback onComplete;
 
@@ -14,32 +15,13 @@ class AIProcessingScreen extends StatefulWidget {
   });
 
   @override
-  State<AIProcessingScreen> createState() => _AIProcessingScreenState();
+  ConsumerState<AIProcessingScreen> createState() => _AIProcessingScreenState();
 }
 
-class _AIProcessingScreenState extends State<AIProcessingScreen>
+class _AIProcessingScreenState extends ConsumerState<AIProcessingScreen>
     with TickerProviderStateMixin {
-  int _currentStep = 0;
-  bool _intentExtracted = false;
   late AnimationController _pulseController;
-
-  final _steps = [
-    'Analyzing your request...',
-    'Detecting language & intent...',
-    'Extracting service details...',
-    'Searching providers...',
-    'Processing complete!',
-  ];
-
-  final _intent = const IntentResult(
-    serviceType: 'AC Repair',
-    location: 'Gulberg, Lahore',
-    urgency: 'Medium',
-    budgetRange: '~2,000 PKR',
-    preferredTime: 'Today',
-    language: 'Roman Urdu',
-    confidence: 0.94,
-  );
+  Timer? _fallbackTimer;
 
   @override
   void initState() {
@@ -48,25 +30,16 @@ class _AIProcessingScreenState extends State<AIProcessingScreen>
       duration: const Duration(seconds: 2),
       vsync: this,
     )..repeat(reverse: true);
-    _simulateProcessing();
-  }
 
-  void _simulateProcessing() {
-    Timer.periodic(const Duration(milliseconds: 900), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      if (_currentStep < _steps.length - 1) {
-        setState(() {
-          _currentStep++;
-          if (_currentStep >= 2) _intentExtracted = true;
-        });
-      } else {
-        timer.cancel();
-        Future.delayed(const Duration(milliseconds: 800), () {
-          if (mounted) widget.onComplete();
-        });
+    // Trigger workflow via Riverpod on next frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(activeWorkflowProvider.notifier).startWorkflow(widget.userRequest);
+    });
+    
+    // Safety fallback just in case backend fails or disconnects
+    _fallbackTimer = Timer(const Duration(seconds: 15), () {
+      if (mounted) {
+        widget.onComplete();
       }
     });
   }
@@ -74,12 +47,37 @@ class _AIProcessingScreenState extends State<AIProcessingScreen>
   @override
   void dispose() {
     _pulseController.dispose();
+    _fallbackTimer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    // Listen to real-time workflow state
+    final workflowState = ref.watch(activeWorkflowProvider);
+    final timeline = ref.watch(workflowTimelineProvider);
+    
+    // Extract intent from the first step if available
+    Map<String, String>? intentDetails;
+    if (timeline.isNotEmpty && timeline.first.agentName == 'Intent Agent') {
+      intentDetails = timeline.first.details;
+    }
+    
+    final isError = workflowState.error != null;
+    
+    // Complete automatically when ranking or booking agent finishes
+    ref.listen(workflowTimelineProvider, (previous, next) {
+      if (next.isNotEmpty && (next.last.agentName.contains('Ranking') || next.last.agentName.contains('Follow-Up'))) {
+        if (next.last.status == 'completed') {
+          _fallbackTimer?.cancel();
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) widget.onComplete();
+          });
+        }
+      }
+    });
 
     return Scaffold(
       body: Container(
@@ -109,7 +107,10 @@ class _AIProcessingScreenState extends State<AIProcessingScreen>
                   children: [
                     IconButton(
                       icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(context).pop(),
+                      onPressed: () {
+                        ref.read(activeWorkflowProvider.notifier).cancelWorkflow();
+                        Navigator.of(context).pop();
+                      },
                     ),
                     const Spacer(),
                     Container(
@@ -127,16 +128,16 @@ class _AIProcessingScreenState extends State<AIProcessingScreen>
                           Container(
                             width: 8,
                             height: 8,
-                            decoration: const BoxDecoration(
-                              color: AppColors.cyan,
+                            decoration: BoxDecoration(
+                              color: isError ? AppColors.error : AppColors.cyan,
                               shape: BoxShape.circle,
                             ),
                           ),
                           const SizedBox(width: 6),
-                          const Text(
-                            'AI Processing',
+                          Text(
+                            isError ? 'Error Occurred' : 'Live Orchestration',
                             style: TextStyle(
-                              color: AppColors.cyan,
+                              color: isError ? AppColors.error : AppColors.cyan,
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
                             ),
@@ -200,12 +201,14 @@ class _AIProcessingScreenState extends State<AIProcessingScreen>
                         height: 100,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          gradient: const LinearGradient(
-                            colors: [AppColors.cyan, AppColors.purpleDeep],
+                          gradient: LinearGradient(
+                            colors: isError 
+                              ? [AppColors.error, AppColors.purpleDeep]
+                              : [AppColors.cyan, AppColors.purpleDeep],
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: AppColors.cyan
+                              color: (isError ? AppColors.error : AppColors.cyan)
                                   .withOpacity(0.3 * _pulseController.value),
                               blurRadius: 30 + 20 * _pulseController.value,
                               spreadRadius: 5 * _pulseController.value,
@@ -220,12 +223,15 @@ class _AIProcessingScreenState extends State<AIProcessingScreen>
                 ),
                 const SizedBox(height: 24),
 
-                // Processing Steps
+                // Processing Step Live Output
                 Center(
                   child: Text(
-                    _steps[_currentStep],
+                    isError 
+                        ? 'Connection Error: \${workflowState.error}'
+                        : (timeline.isNotEmpty ? timeline.last.outputSummary : 'Initializing Agents...'),
+                    textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: AppColors.cyan,
+                      color: isError ? AppColors.error : AppColors.cyan,
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
                     ),
@@ -233,34 +239,12 @@ class _AIProcessingScreenState extends State<AIProcessingScreen>
                 ),
                 const SizedBox(height: 20),
 
-                // Step indicators
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(_steps.length, (i) {
-                    return Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                      width: i <= _currentStep ? 24 : 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: i <= _currentStep
-                            ? AppColors.cyan
-                            : (isDark
-                                ? AppColors.darkBorder
-                                : AppColors.borderLight),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    );
-                  }),
-                ),
-                const SizedBox(height: 36),
-
-                // Extracted Intent
+                // Extracted Intent (if available)
                 AnimatedOpacity(
-                  opacity: _intentExtracted ? 1.0 : 0.0,
+                  opacity: intentDetails != null ? 1.0 : 0.0,
                   duration: const Duration(milliseconds: 500),
                   child: AnimatedSlide(
-                    offset:
-                        _intentExtracted ? Offset.zero : const Offset(0, 0.2),
+                    offset: intentDetails != null ? Offset.zero : const Offset(0, 0.2),
                     duration: const Duration(milliseconds: 500),
                     child: Container(
                       padding: const EdgeInsets.all(20),
@@ -293,31 +277,32 @@ class _AIProcessingScreenState extends State<AIProcessingScreen>
                                     ?.copyWith(fontWeight: FontWeight.w700),
                               ),
                               const Spacer(),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: AppColors.success.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  '${(_intent.confidence * 100).toInt()}% confident',
-                                  style: const TextStyle(
-                                    color: AppColors.success,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
+                              if (timeline.isNotEmpty)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.success.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    '\${(timeline.first.confidence * 100).toInt()}% confident',
+                                    style: const TextStyle(
+                                      color: AppColors.success,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 ),
-                              ),
                             ],
                           ),
                           const SizedBox(height: 16),
-                          _IntentRow('Service', _intent.serviceType, Icons.build_rounded, isDark),
-                          _IntentRow('Location', _intent.location, Icons.location_on_rounded, isDark),
-                          _IntentRow('Urgency', _intent.urgency, Icons.speed_rounded, isDark),
-                          _IntentRow('Budget', _intent.budgetRange ?? 'Not specified', Icons.payments_rounded, isDark),
-                          _IntentRow('Time', _intent.preferredTime ?? 'Flexible', Icons.schedule_rounded, isDark),
-                          _IntentRow('Language', _intent.language, Icons.translate_rounded, isDark),
+                          if (intentDetails != null) ...[
+                            _IntentRow('Service', intentDetails['service_type'] ?? '', Icons.build_rounded, isDark),
+                            _IntentRow('Location', intentDetails['location'] ?? '', Icons.location_on_rounded, isDark),
+                            _IntentRow('Urgency', intentDetails['urgency'] ?? '', Icons.speed_rounded, isDark),
+                            _IntentRow('Language', intentDetails['language'] ?? '', Icons.translate_rounded, isDark),
+                          ],
                         ],
                       ),
                     ),
@@ -342,6 +327,7 @@ class _IntentRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (value.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(

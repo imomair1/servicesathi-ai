@@ -1,16 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
-import '../data/mock_data.dart';
 import '../widgets/agent_node.dart';
+import '../features/workflow/providers/workflow_providers.dart';
 
-class AgentWorkflowScreen extends StatefulWidget {
+class AgentWorkflowScreen extends ConsumerStatefulWidget {
   const AgentWorkflowScreen({super.key});
 
   @override
-  State<AgentWorkflowScreen> createState() => _AgentWorkflowScreenState();
+  ConsumerState<AgentWorkflowScreen> createState() => _AgentWorkflowScreenState();
 }
 
-class _AgentWorkflowScreenState extends State<AgentWorkflowScreen>
+class _AgentWorkflowScreenState extends ConsumerState<AgentWorkflowScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _headerController;
 
@@ -32,8 +33,11 @@ class _AgentWorkflowScreenState extends State<AgentWorkflowScreen>
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final steps = MockData.workflowSteps;
+    
+    // Read from realtime websocket state
+    final steps = ref.watch(workflowTimelineProvider);
     final totalMs = steps.fold<int>(0, (sum, s) => sum + s.durationMs);
+    final completedCount = steps.where((s) => s.status == 'completed').length;
 
     return Scaffold(
       body: CustomScrollView(
@@ -124,7 +128,7 @@ class _AgentWorkflowScreenState extends State<AgentWorkflowScreen>
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      'Multi-agent pipeline execution log',
+                                      'Live multi-agent execution log',
                                       style: TextStyle(
                                         color: Colors.white.withOpacity(0.5),
                                         fontSize: 13,
@@ -140,13 +144,13 @@ class _AgentWorkflowScreenState extends State<AgentWorkflowScreen>
                           Row(
                             children: [
                               _HeaderStat(
-                                  '${steps.length}', 'Agents', AppColors.cyan),
+                                  '\${steps.length}', 'Agents', AppColors.cyan),
                               const SizedBox(width: 20),
                               _HeaderStat(
-                                  '${totalMs}ms', 'Total Time', AppColors.success),
+                                  '\${totalMs}ms', 'Total Time', AppColors.success),
                               const SizedBox(width: 20),
                               _HeaderStat(
-                                '${steps.where((s) => s.status == 'completed').length}/${steps.length}',
+                                '\$completedCount/\${steps.length}',
                                 'Completed',
                                 AppColors.purpleMid,
                               ),
@@ -181,6 +185,21 @@ class _AgentWorkflowScreenState extends State<AgentWorkflowScreen>
             ),
           ),
 
+          if (steps.isEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(40.0),
+                child: Center(
+                  child: Text(
+                    "Waiting for orchestration events...",
+                    style: TextStyle(
+                      color: isDark ? Colors.white54 : Colors.black54,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
           // Agent Nodes
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 100),
@@ -190,7 +209,7 @@ class _AgentWorkflowScreenState extends State<AgentWorkflowScreen>
                   final step = steps[index];
                   return AgentWorkflowNode(
                     step: step,
-                    isActive: step.status == 'running',
+                    isActive: step.status == 'running' || step.status == 'error',
                     isLast: index == steps.length - 1,
                     index: index,
                   );
