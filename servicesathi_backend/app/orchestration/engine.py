@@ -7,6 +7,8 @@ from app.orchestration.agents.discovery import DiscoveryAgent
 from app.orchestration.agents.ranking import RankingAgent
 from app.orchestration.agents.booking import BookingAgent
 from app.orchestration.agents.follow_up import FollowUpAgent
+from app.services.analytics import analytics_service
+from app.core.config import settings
 
 class WorkflowEngine:
     def __init__(self, state: WorkflowState):
@@ -28,6 +30,8 @@ class WorkflowEngine:
         """
         if self.state.status == "pending":
             self.state.status = "running"
+            analytics_service.log_workflow_start(self.state.workflow_id)
+            
         await self._publish_state()
 
         while self.state.status in ["running", "retrying"]:
@@ -46,18 +50,27 @@ class WorkflowEngine:
 
             try:
                 trace = await agent.execute(self.state)
+                
+                # Log to analytics
+                analytics_service.log_agent_trace(trace.agent_name, trace.duration_ms, trace.status)
+                
                 self.router.evaluate_trace(self.state, trace)
                 await self._publish_trace(trace)
                 
             except Exception as e:
                 self.router.handle_failure(self.state, e)
+                analytics_service.log_agent_trace(next_agent_name, 0, "error")
                 await self._publish_state()
                 
             # Yield to event loop to allow UI updates
-            await asyncio.sleep(0.5)
+            sleep_time = 2.0 if settings.PRESENTATION_MODE else 0.5
+            await asyncio.sleep(sleep_time)
 
         # Final state publish
         await self._publish_state()
+        
+        if self.state.status in ["completed", "error", "waiting_for_user"]:
+            analytics_service.log_workflow_end(self.state.workflow_id, self.state.status, self.state.model_dump())
 
     async def _publish_trace(self, trace):
         from app.services.redis_cache import redis_state

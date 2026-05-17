@@ -1,6 +1,8 @@
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.api.routes import api_router
 from app.api.websockets import ws_router
@@ -39,6 +41,13 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["Health"])
     async def health_check():
         return {"status": "ok", "version": settings.VERSION}
+        
+    @app.get("/admin", response_class=HTMLResponse, tags=["Admin"])
+    async def admin_dashboard():
+        import os
+        index_path = os.path.join(os.path.dirname(__file__), "admin_ui", "index.html")
+        with open(index_path, "r") as f:
+            return f.read()
 
     return app
 
