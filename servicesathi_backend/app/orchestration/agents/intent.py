@@ -7,19 +7,20 @@ from app.models import AgentTrace, IntentExtraction
 
 class IntentAgent(BaseAgent):
     def __init__(self):
-        super().__init__(name="Intent Agent", icon="🧠")
+        super().__init__(name="IntentAgent", icon="🧠")
         self.system_instruction = """
         You are an Intent Extraction Agent for ServiceSathi AI.
-        Your job is to analyze user requests for home services in Pakistan.
-        The user might speak English, Urdu, or Roman Urdu (e.g., 'mujhe AC theek karwana hai').
-        Extract the required service, location, urgency, language used, and any budget mentioned.
-        Normalize the service type to one of: ['ac_repair', 'plumbing', 'electrical', 'beauty', 'tutoring', 'mechanic', 'other'].
+        Analyze user requests for home services in Pakistan. Language: English, Urdu, or Roman Urdu.
+        Extract service, location, urgency, language, and budget.
+        Normalize the service type to: ['ac_repair', 'plumbing', 'electrical', 'beauty', 'tutoring', 'mechanic', 'other'].
+        CRITICAL: If essential context like 'location' is missing, set `confidence` below 0.7 and add 'location' to the `missing_context` list.
+        If the service is completely ambiguous, add 'service_type' to `missing_context`.
         """
 
     async def execute(self, state: WorkflowState) -> AgentTrace:
         start_time = time.time()
         
-        prompt = f"Analyze the following request:\nQuery: {state.original_query}\nUser Location context: {state.current_location}"
+        prompt = f"Analyze the following request:\nQuery: {state.original_query}\nUser Location context: {state.current_location}\nPrevious Answers: {state.resolved_context}"
         
         try:
             # Call Gemini
@@ -31,28 +32,29 @@ class IntentAgent(BaseAgent):
             
             # Mutate state
             state.intent = extracted.model_dump()
-            state.completed_steps.append("intent")
             
             duration_ms = int((time.time() - start_time) * 1000)
             
-            # Return trace
-            return AgentTrace(
-                agent_name=self.name,
+            # If missing context, output summary reflects it
+            summary = f"Detected: {extracted.service_type} in {extracted.location}"
+            if extracted.missing_context:
+                summary = f"Missing context: {', '.join(extracted.missing_context)}"
+                
+            return self.create_trace(
                 action="Analyzing natural language input",
                 status="completed",
-                duration_ms=duration_ms,
                 confidence=extracted.confidence,
-                output_summary=f"Detected: {extracted.service_type} in {extracted.location}, {extracted.urgency} urgency",
-                details=state.intent
+                output_summary=summary,
+                details=state.intent,
+                duration_ms=duration_ms
             )
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
-            return AgentTrace(
-                agent_name=self.name,
+            return self.create_trace(
                 action="Analyzing natural language input",
                 status="error",
-                duration_ms=duration_ms,
                 confidence=0.0,
                 output_summary=str(e),
-                details={"error": str(e)}
+                details={"error": str(e)},
+                duration_ms=duration_ms
             )

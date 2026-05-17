@@ -1,6 +1,8 @@
 import asyncio
 from app.orchestration.state import WorkflowState
+from app.orchestration.router import WorkflowRouter
 from app.orchestration.agents.intent import IntentAgent
+from app.orchestration.agents.context import ContextAgent
 from app.orchestration.agents.discovery import DiscoveryAgent
 from app.orchestration.agents.ranking import RankingAgent
 from app.orchestration.agents.booking import BookingAgent
@@ -9,38 +11,52 @@ from app.orchestration.agents.follow_up import FollowUpAgent
 class WorkflowEngine:
     def __init__(self, state: WorkflowState):
         self.state = state
-        self.intent_agent = IntentAgent()
-        self.discovery_agent = DiscoveryAgent()
-        self.ranking_agent = RankingAgent()
-        self.booking_agent = BookingAgent()
-        self.follow_up_agent = FollowUpAgent()
+        self.router = WorkflowRouter()
+        
+        self.agents = {
+            "IntentAgent": IntentAgent(),
+            "ContextAgent": ContextAgent(),
+            "DiscoveryAgent": DiscoveryAgent(),
+            "RankingAgent": RankingAgent(),
+            "BookingAgent": BookingAgent(),
+            "FollowUpAgent": FollowUpAgent()
+        }
 
     async def run(self):
         """
-        Executes the agentic DAG pipeline.
-        In a full Antigravity setup, this would be a managed workflow graph.
+        Executes the dynamic agentic pipeline using a state machine controller.
         """
-        self.state.status = "running"
+        if self.state.status == "pending":
+            self.state.status = "running"
         await self._publish_state()
 
-        agents_to_run = [
-            self.intent_agent,
-            self.discovery_agent,
-            self.ranking_agent,
-            self.booking_agent,
-            self.follow_up_agent
-        ]
-
-        for agent in agents_to_run:
-            trace = await agent.execute(self.state)
-            await self._publish_trace(trace)
+        while self.state.status in ["running", "retrying"]:
+            next_agent_name = self.router.determine_next_agent(self.state)
             
-            if trace.status == "error":
-                self.state.status = "error"
+            if not next_agent_name:
+                break # Wait for user or completed
+                
+            agent = self.agents.get(next_agent_name)
+            
+            if self.state.status == "retrying":
+                # Implement exponential backoff
+                backoff_time = 2 ** self.state.retry_count
+                await asyncio.sleep(min(backoff_time, 5))
+                self.state.status = "running"
+
+            try:
+                trace = await agent.execute(self.state)
+                self.router.evaluate_trace(self.state, trace)
+                await self._publish_trace(trace)
+                
+            except Exception as e:
+                self.router.handle_failure(self.state, e)
                 await self._publish_state()
-                return
-        
-        self.state.status = "completed"
+                
+            # Yield to event loop to allow UI updates
+            await asyncio.sleep(0.5)
+
+        # Final state publish
         await self._publish_state()
 
     async def _publish_trace(self, trace):
@@ -78,4 +94,3 @@ class WorkflowEngine:
             FirestoreRepo.log_workflow(self.state.workflow_id, state_dump)
             if self.state.booking_result:
                 FirestoreRepo.create_booking(self.state.booking_result)
-
